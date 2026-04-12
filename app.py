@@ -11,20 +11,33 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
 from bs4 import BeautifulSoup
+import openai
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 # ===============================
+
+# Настройка клиента DeepSeek
+if DEEPSEEK_API_KEY:
+    deepseek_client = openai.OpenAI(
+        api_key=DEEPSEEK_API_KEY,
+        base_url="https://api.deepseek.com/v1"
+    )
+else:
+    deepseek_client = None
+    logging.warning("DEEPSEEK_API_KEY не задан")
 
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
     "https://ria.ru/export/rss2/index.xml",
+    "https://tass.ru/rss",
 ]
 
 CHECK_INTERVAL = 1
-POSTS_PER_CHECK = 2
+POSTS_PER_CHECK = 1
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -62,7 +75,7 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:5]:
+            for item in soup.find_all('item')[:10]:
                 title = item.find('title')
                 title_text = title.text if title else ""
                 link = item.find('link')
@@ -74,7 +87,7 @@ async def fetch_rss_feed(url):
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text[:400],
+                        'description': desc_text[:500],
                         'url': link_url,
                     })
             return items
@@ -94,15 +107,35 @@ def get_emoji_by_title(title):
         return "🚨"
     return "🔺"
 
-def format_post(title, description):
-    emoji = get_emoji_by_title(title)
-    post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
-    if description and len(description) > 30:
-        post += f"{description}\n\n"
-    else:
-        post += "Подробнее по ссылке\n\n"
-    post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
-    return post
+async def expand_with_deepseek(title, description):
+    """Раскрывает тему заголовка через DeepSeek"""
+    if not deepseek_client:
+        return description if description and len(description) > 30 else None
+    
+    prompt = f"""Ты пишешь новостной пост в Telegram. На основе заголовка напиши короткий текст (3-6 предложений), который полностью раскрывает суть новости. Пиши только факты, без воды, без фраз "по данным источника", без "продолжение следует". Заголовок не повторяй.
+
+Заголовок: {title}
+
+Текст поста:"""
+    
+    try:
+        response = await asyncio.to_thread(
+            deepseek_client.chat.completions.create,
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "Ты помощник, который пишет новостные посты. Пиши коротко, по делу, без воды."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        result = response.choices[0].message.content.strip()
+        if len(result) > 50:
+            return result
+    except Exception as e:
+        logging.error(f"DeepSeek error: {e}")
+    
+    return description if description and len(description) > 30 else None
 
 async def generate_image(title):
     try:
@@ -112,6 +145,16 @@ async def generate_image(title):
         return url
     except Exception:
         return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
+
+def format_post(title, body):
+    emoji = get_emoji_by_title(title)
+    post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
+    if body:
+        post += f"{body}\n\n"
+    else:
+        post += "Подробнее по ссылке\n\n"
+    post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
+    return post
 
 async def process_and_post():
     posted = load_posted()
@@ -140,7 +183,9 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        post_text = format_post(news_item['title'], news_item['description'])
+        body = await expand_with_deepseek(news_item['title'], news_item['description'])
+        post_text = format_post(news_item['title'], body)
+        
         image_url = await generate_image(news_item['title'])
         
         try:
