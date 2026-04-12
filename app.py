@@ -11,7 +11,7 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import InputFile
+from aiogram.types import FSInputFile
 import tempfile
 
 # ========== НАСТРОЙКИ ==========
@@ -24,10 +24,10 @@ SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
     "https://tass.ru/rss",
     "https://lenta.ru/rss",
-    "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",  # Канал НМШ
+    "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
 ]
 
-CHECK_INTERVAL = 1
+CHECK_INTERVAL = 30
 POSTS_PER_CHECK = 3
 MAX_TEXT_LENGTH = 1100
 
@@ -59,7 +59,6 @@ async def get_session():
     return session
 
 async def search_unsplash_image(keywords):
-    """Генерирует картинку через Unsplash по ключевым словам"""
     try:
         url = "https://api.unsplash.com/search/photos"
         params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
@@ -76,21 +75,16 @@ async def search_unsplash_image(keywords):
     return None
 
 async def fetch_first_paragraph(url):
-    """Загружает страницу новости и вытаскивает первый абзац текста"""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         sess = await get_session()
         async with sess.get(url, timeout=20, headers=headers) as resp:
             if resp.status != 200:
                 return None
             html = await resp.text()
             soup = BeautifulSoup(html, 'html.parser')
-            
             for script in soup(["script", "style", "nav", "header", "footer", "aside"]):
                 script.decompose()
-            
             paragraphs = soup.find_all('p')
             for p in paragraphs:
                 text = p.get_text().strip()
@@ -132,7 +126,6 @@ async def fetch_rss_feed(url):
         return []
 
 def clean_text(text):
-    """Убирает мусор из текста"""
     if not text:
         return ""
     text = re.sub(r'\s+', ' ', text)
@@ -164,7 +157,6 @@ async def rewrite_news(news_item):
     title = news_item['title']
     url = news_item['url']
     
-    # Текст новости
     page_text = await fetch_first_paragraph(url)
     if page_text:
         final_text = clean_text(page_text)
@@ -183,7 +175,6 @@ async def rewrite_news(news_item):
     post += f"{final_text}\n\n"
     post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
     
-    # ГЕНЕРИРУЕМ КАРТИНКУ ВСЕГДА
     keywords = ' '.join(title.split()[:5])
     image_url = await search_unsplash_image(keywords)
     
@@ -223,10 +214,9 @@ async def process_and_post():
         post_text, image_url = await rewrite_news(news_item)
         
         try:
-            # ФОТОГРАФИЯ БУДЕТ ВСЕГДА
-            # Если Unsplash не дал картинку, используем дефолтную
+            # Дефолтная картинка если нет
             if not image_url:
-                image_url = "https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=1200"  # новостная картинка по умолчанию
+                image_url = "https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=1200"
             
             sess = await get_session()
             async with sess.get(image_url) as img_resp:
@@ -236,11 +226,11 @@ async def process_and_post():
                         tmp_file.write(photo_data)
                         tmp_path = tmp_file.name
                     
-                    photo_file = InputFile(tmp_path)
+                    # Используем FSInputFile вместо InputFile
+                    photo_file = FSInputFile(tmp_path)
                     await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
                     os.unlink(tmp_path)
                 else:
-                    # Если картинка не загрузилась, отправляем без фото
                     await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             
             posted.add(news_item['url'])
