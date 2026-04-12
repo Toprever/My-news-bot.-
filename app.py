@@ -24,6 +24,7 @@ SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
     "https://tass.ru/rss",
     "https://lenta.ru/rss",
+    "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",  # Канал НМШ
 ]
 
 CHECK_INTERVAL = 1
@@ -58,6 +59,7 @@ async def get_session():
     return session
 
 async def search_unsplash_image(keywords):
+    """Генерирует картинку через Unsplash по ключевым словам"""
     try:
         url = "https://api.unsplash.com/search/photos"
         params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
@@ -86,17 +88,13 @@ async def fetch_first_paragraph(url):
             html = await resp.text()
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Удаляем скрипты и стили
             for script in soup(["script", "style", "nav", "header", "footer", "aside"]):
                 script.decompose()
             
-            # Ищем первый параграф с текстом
             paragraphs = soup.find_all('p')
             for p in paragraphs:
                 text = p.get_text().strip()
-                # Отфильтровываем короткие или бессмысленные абзацы
                 if len(text) > 100 and not re.search(r'фото|видео|подписаться|реклама|cookie', text, re.I):
-                    # Чистим текст
                     text = re.sub(r'\s+', ' ', text)
                     return text[:MAX_TEXT_LENGTH]
             return None
@@ -135,24 +133,13 @@ async def fetch_rss_feed(url):
 
 def clean_text(text):
     """Убирает мусор из текста"""
+    if not text:
+        return ""
     text = re.sub(r'\s+', ' ', text)
     garbage_phrases = [
-        r'Читать \w+\.ru в',
-        r'Архивное фото',
-        r'Чтобы оставить реакцию.*',
-        r'Обсудить',
-        r'Рекомендуем',
-        r'Лента новостей',
-        r'Заголовок открываемого материала',
-        r'Доступ к чату заблокирован.*',
-        r'Обсуждение закрыто.*',
-        r'Telegram',
-        r'ВКонтакте',
-        r'Одноклассники',
-        r'X',
-        r'loader',
-        r'просмотров',
-        r'Отправить еще раз',
+        r'Читать \w+\.ru в', r'Архивное фото', r'Чтобы оставить реакцию.*',
+        r'Обсудить', r'Рекомендуем', r'Лента новостей', r'loader', r'просмотров',
+        r'Отправить еще раз', r'Telegram', r'ВКонтакте', r'Одноклассники', r'X',
     ]
     for phrase in garbage_phrases:
         text = re.sub(phrase, '', text, flags=re.IGNORECASE)
@@ -177,20 +164,16 @@ async def rewrite_news(news_item):
     title = news_item['title']
     url = news_item['url']
     
-    # Пытаемся получить первый абзац со страницы
+    # Текст новости
     page_text = await fetch_first_paragraph(url)
-    
     if page_text:
         final_text = clean_text(page_text)
     else:
-        # Если страница не загрузилась, используем RSS-описание
-        final_text = clean_text(news_item['description'])
+        final_text = clean_text(news_item.get('description', ''))
     
-    # Если текста всё равно нет
     if not final_text or len(final_text) < 50:
         final_text = "Подробнее по ссылке"
     
-    # Обрезаем до лимита
     if len(final_text) > MAX_TEXT_LENGTH:
         final_text = final_text[:MAX_TEXT_LENGTH] + "..."
     
@@ -200,7 +183,7 @@ async def rewrite_news(news_item):
     post += f"{final_text}\n\n"
     post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
     
-    # Ищем картинку по заголовку
+    # ГЕНЕРИРУЕМ КАРТИНКУ ВСЕГДА
     keywords = ' '.join(title.split()[:5])
     image_url = await search_unsplash_image(keywords)
     
@@ -240,22 +223,25 @@ async def process_and_post():
         post_text, image_url = await rewrite_news(news_item)
         
         try:
-            if image_url:
-                sess = await get_session()
-                async with sess.get(image_url) as img_resp:
-                    if img_resp.status == 200:
-                        photo_data = await img_resp.read()
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-                            tmp_file.write(photo_data)
-                            tmp_path = tmp_file.name
-                        
-                        photo_file = InputFile(tmp_path)
-                        await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
-                        os.unlink(tmp_path)
-                    else:
-                        await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
-            else:
-                await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
+            # ФОТОГРАФИЯ БУДЕТ ВСЕГДА
+            # Если Unsplash не дал картинку, используем дефолтную
+            if not image_url:
+                image_url = "https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=1200"  # новостная картинка по умолчанию
+            
+            sess = await get_session()
+            async with sess.get(image_url) as img_resp:
+                if img_resp.status == 200:
+                    photo_data = await img_resp.read()
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                        tmp_file.write(photo_data)
+                        tmp_path = tmp_file.name
+                    
+                    photo_file = InputFile(tmp_path)
+                    await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
+                    os.unlink(tmp_path)
+                else:
+                    # Если картинка не загрузилась, отправляем без фото
+                    await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             
             posted.add(news_item['url'])
             save_posted(posted)
