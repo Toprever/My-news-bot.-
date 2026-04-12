@@ -3,5 +3,4 @@ aiohttp
 beautifulsoup4
 flask
 lxml
-yandexcloud
-google-generativeai
+openai
