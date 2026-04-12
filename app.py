@@ -27,7 +27,7 @@ SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
 ]
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 3
 MAX_TEXT_LENGTH = 1100
 
