@@ -3,6 +3,7 @@ import logging
 import json
 import os
 import re
+import random
 import aiohttp
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -10,13 +11,14 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import BufferedInputFile
+from aiogram.types import InputFile
+import tempfile
 
-# ========== НАСТРОЙКИ (С ТВОИМИ ДАННЫМИ) ==========
+# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
-FIRECRAWL_API_KEY = "fc-f01a96f6246949ccb48af5598203a459"
-# =================================================
+UNSPLASH_ACCESS_KEY = "AqS8-eoVpvoTexWP85LIaf-vEf6kSZajprjUeJBTdb8"
+# ===============================
 
 SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
@@ -26,6 +28,7 @@ SOURCES = [
 
 CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 3
+MAX_TEXT_LENGTH = 1100
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -54,6 +57,22 @@ async def get_session():
         session = aiohttp.ClientSession()
     return session
 
+async def search_unsplash_image(keywords):
+    try:
+        url = "https://api.unsplash.com/search/photos"
+        params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
+        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+        sess = await get_session()
+        async with sess.get(url, params=params, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data["results"]:
+                    img = random.choice(data["results"])
+                    return img["urls"]["regular"]
+    except Exception as e:
+        logging.error(f"Unsplash error: {e}")
+    return None
+
 async def fetch_rss_feed(url):
     try:
         sess = await get_session()
@@ -63,14 +82,19 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:10]:
+            for item in soup.find_all('item')[:15]:
                 title = item.find('title')
                 title_text = title.text if title else ""
+                description = item.find('description')
+                desc_text = description.text if description else ""
+                desc_text = re.sub(r'<[^>]+>', '', desc_text)
+                desc_text = re.sub(r'\s+', ' ', desc_text).strip()
                 link = item.find('link')
                 link_url = link.text if link else ""
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
+                        'description': desc_text,
                         'url': link_url,
                     })
             return items
@@ -78,92 +102,75 @@ async def fetch_rss_feed(url):
         logging.error(f"RSS error {url}: {e}")
         return []
 
-async def scrape_with_firecrawl(url):
-    """Отправляет URL в Firecrawl и получает текст + картинку"""
-    api_url = "https://api.firecrawl.dev/v1/scrape"
-    headers = {
-        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "url": url,
-        "formats": ["markdown"],
-        "onlyMainContent": True
-    }
-    
-    try:
-        sess = await get_session()
-        async with sess.post(api_url, json=payload, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("success"):
-                    content = data.get("data", {}).get("markdown", "")
-                    # Пробуем вытащить первую картинку из markdown
-                    img_match = re.search(r'!\[.*?\]\((https?://[^\s)]+)\)', content)
-                    image_url = img_match.group(1) if img_match else None
-                    # Чистим текст от markdown-разметки
-                    clean_text = re.sub(r'!\[.*?\]\(.*?\)', '', content)
-                    clean_text = re.sub(r'\[.*?\]\(.*?\)', '', clean_text)
-                    clean_text = re.sub(r'#{1,6}\s*', '', clean_text)
-                    clean_text = '\n'.join(line for line in clean_text.splitlines() if line.strip())
-                    return clean_text[:3000], image_url
-                else:
-                    logging.error(f"Firecrawl error: {data}")
-            else:
-                logging.error(f"Firecrawl HTTP {resp.status}: {await resp.text()}")
-    except Exception as e:
-        logging.error(f"Firecrawl error for {url}: {e}")
-    return None, None
+def clean_text(text):
+    """Убирает мусор из текста"""
+    # Убираем лишние пробелы и переносы
+    text = re.sub(r'\s+', ' ', text)
+    # Убираем фразы типа "Читать ria.ru в", "Архивное фото" и т.д.
+    garbage_phrases = [
+        r'Читать \w+\.ru в',
+        r'Архивное фото',
+        r'Чтобы оставить реакцию.*',
+        r'Обсудить',
+        r'Рекомендуем',
+        r'Лента новостей',
+        r'Заголовок открываемого материала',
+        r'Доступ к чату заблокирован.*',
+        r'Обсуждение закрыто.*',
+        r'Telegram',
+        r'ВКонтакте',
+        r'Одноклассники',
+        r'X',
+        r'loader',
+        r'просмотров',
+        r'Отправить еще раз',
+    ]
+    for phrase in garbage_phrases:
+        text = re.sub(phrase, '', text, flags=re.IGNORECASE)
+    # Убираем множественные пробелы
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 def get_emoji_by_title(title):
-    """Возвращает эмодзи в зависимости от содержания заголовка"""
     title_lower = title.lower()
-    
-    # Политика и власть
-    if re.search(r'путин|трамп|байден|золотов|шайгу|политик|кремль|белый дом|конгресс|депутат|госдума|выборы', title_lower):
+    if re.search(r'путин|трамп|байден|политик|кремль|депутат|госдума|выборы|пезешкиан', title_lower):
         return "🏛️"
-    # Война и конфликты
-    if re.search(r'войн|арми|солдат|танк|обстрел|атака|удар|бомб|взрыв|пожар|спецоперация|донбасс|украин|израиль|палестин|иран', title_lower):
+    if re.search(r'войн|арми|солдат|танк|обстрел|атака|взрыв|украин|израиль|палестин|иран', title_lower):
         return "💥"
-    # Экономика и бизнес
-    if re.search(r'рубл|доллар|евро|нефт|газ|цен|денег|бизнес|рынок|акци|крипт|биткоин', title_lower):
+    if re.search(r'рубл|доллар|евро|нефт|газ|денег|бизнес|крипт|биткоин', title_lower):
         return "💰"
-    # Происшествия и ЧП
-    if re.search(r'авари|дтп|погиб|смерт|убийств|насили|пострада|спас|пожар|наводн|землетряс', title_lower):
+    if re.search(r'авари|дтп|погиб|смерт|убийств|пожар|наводн|землетряс', title_lower):
         return "🚨"
-    # Технологии и наука
-    if re.search(r'айфон|смартфон|компьютер|интернет|нейросет|ии|технолог|гаджет|наук|космос', title_lower):
-        return "📱"
-    # Спорт
-    if re.search(r'футбол|хоккей|теннис|спорт|матч|олимпиад|чемпионат', title_lower):
-        return "⚽"
-    # Медицина и здоровье
-    if re.search(r'медицин|больниц|врач|лекарств|вирус|ковид|эпидеми|здоровь', title_lower):
-        return "🏥"
-    # Эпичный или важный заголовок
-    if re.search(r'сенсац|шок|эксклюзив|впервые|наконец|прорыв|историческ', title_lower):
-        return "🔥"
-    
-    # Если ничего не подошло — молния
+    if re.search(r'пасх|рождеств|праздник', title_lower):
+        return "🐣"
     return "⚡️"
 
 async def rewrite_news(news_item):
     title = news_item['title']
-    url = news_item['url']
+    raw_desc = news_item['description']
     
-    full_text, image_url = await scrape_with_firecrawl(url)
+    # Чистим текст
+    clean_desc = clean_text(raw_desc)
     
-    # Выбираем эмодзи по заголовку
+    # Обрезаем до лимита
+    if len(clean_desc) > MAX_TEXT_LENGTH:
+        clean_desc = clean_desc[:MAX_TEXT_LENGTH] + "..."
+    
     emoji = get_emoji_by_title(title)
     
+    # Формируем пост
     post = f"{emoji} <b>{title}</b>\n\n"
     
-    if full_text:
-        post += f"{full_text}\n\n"
+    if clean_desc and len(clean_desc) > 20:
+        post += f"{clean_desc}\n\n"
     else:
-        post += f"Не удалось загрузить полный текст.\n\n"
+        post += f"Подробнее по ссылке\n\n"
     
     post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
+    
+    # Ищем картинку по заголовку
+    keywords = ' '.join(title.split()[:5])
+    image_url = await search_unsplash_image(keywords)
     
     return post, image_url
 
@@ -206,9 +213,13 @@ async def process_and_post():
                 async with sess.get(image_url) as img_resp:
                     if img_resp.status == 200:
                         photo_data = await img_resp.read()
-                        # Оборачиваем байты в BufferedInputFile для aiogram 3.x
-                        photo_file = BufferedInputFile(photo_data, filename="news.jpg")
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
+                            tmp_file.write(photo_data)
+                            tmp_path = tmp_file.name
+                        
+                        photo_file = InputFile(tmp_path)
                         await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
+                        os.unlink(tmp_path)
                     else:
                         await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             else:
