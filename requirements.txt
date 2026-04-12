@@ -2,4 +2,4 @@ aiogram
 aiohttp
 beautifulsoup4
 flask
-lxml
+lxml 
