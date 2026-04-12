@@ -10,6 +10,7 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import BufferedInputFile
 
 # ========== НАСТРОЙКИ (С ТВОИМИ ДАННЫМИ) ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
@@ -114,13 +115,48 @@ async def scrape_with_firecrawl(url):
         logging.error(f"Firecrawl error for {url}: {e}")
     return None, None
 
+def get_emoji_by_title(title):
+    """Возвращает эмодзи в зависимости от содержания заголовка"""
+    title_lower = title.lower()
+    
+    # Политика и власть
+    if re.search(r'путин|трамп|байден|золотов|шайгу|политик|кремль|белый дом|конгресс|депутат|госдума|выборы', title_lower):
+        return "🏛️"
+    # Война и конфликты
+    if re.search(r'войн|арми|солдат|танк|обстрел|атака|удар|бомб|взрыв|пожар|спецоперация|донбасс|украин|израиль|палестин|иран', title_lower):
+        return "💥"
+    # Экономика и бизнес
+    if re.search(r'рубл|доллар|евро|нефт|газ|цен|денег|бизнес|рынок|акци|крипт|биткоин', title_lower):
+        return "💰"
+    # Происшествия и ЧП
+    if re.search(r'авари|дтп|погиб|смерт|убийств|насили|пострада|спас|пожар|наводн|землетряс', title_lower):
+        return "🚨"
+    # Технологии и наука
+    if re.search(r'айфон|смартфон|компьютер|интернет|нейросет|ии|технолог|гаджет|наук|космос', title_lower):
+        return "📱"
+    # Спорт
+    if re.search(r'футбол|хоккей|теннис|спорт|матч|олимпиад|чемпионат', title_lower):
+        return "⚽"
+    # Медицина и здоровье
+    if re.search(r'медицин|больниц|врач|лекарств|вирус|ковид|эпидеми|здоровь', title_lower):
+        return "🏥"
+    # Эпичный или важный заголовок
+    if re.search(r'сенсац|шок|эксклюзив|впервые|наконец|прорыв|историческ', title_lower):
+        return "🔥"
+    
+    # Если ничего не подошло — молния
+    return "⚡️"
+
 async def rewrite_news(news_item):
     title = news_item['title']
     url = news_item['url']
     
     full_text, image_url = await scrape_with_firecrawl(url)
     
-    post = f"⚡️ <b>{title}</b>\n\n"
+    # Выбираем эмодзи по заголовку
+    emoji = get_emoji_by_title(title)
+    
+    post = f"{emoji} <b>{title}</b>\n\n"
     
     if full_text:
         post += f"{full_text}\n\n"
@@ -170,7 +206,9 @@ async def process_and_post():
                 async with sess.get(image_url) as img_resp:
                     if img_resp.status == 200:
                         photo_data = await img_resp.read()
-                        await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_data, caption=post_text, parse_mode="HTML")
+                        # Оборачиваем байты в BufferedInputFile для aiogram 3.x
+                        photo_file = BufferedInputFile(photo_data, filename="news.jpg")
+                        await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
                     else:
                         await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             else:
