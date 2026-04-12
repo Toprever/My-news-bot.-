@@ -25,7 +25,7 @@ SOURCES = [
     "https://tass.ru/rss",
 ]
 
-CHECK_INTERVAL = 60  # 1 час
+CHECK_INTERVAL = 60
 POSTS_PER_CHECK = 1
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -103,7 +103,8 @@ async def expand_with_huggingface(title):
     prompt = f"Напиши короткий новостной пост на тему: {title}. 3-4 предложения, только факты, без воды."
     
     try:
-        async with session.post(
+        sess = await get_session()
+        async with sess.post(
             "https://api-inference.huggingface.co/models/microsoft/phi-2",
             headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
             json={"inputs": prompt, "parameters": {"max_length": 200, "temperature": 0.7}},
@@ -119,7 +120,8 @@ async def expand_with_huggingface(title):
                 if len(text) > 50:
                     return text
             else:
-                logging.error(f"HF error {resp.status}")
+                error_text = await resp.text()
+                logging.error(f"HF error {resp.status}: {error_text}")
     except Exception as e:
         logging.error(f"HF error: {e}")
     return None
@@ -130,7 +132,8 @@ def format_post(title, body):
     if body and len(body) > 30:
         post += f"{body}\n\n"
     else:
-        post += "Подробнее по ссылке\n\n"
+        # Если нейросеть не сработала, используем заглушку
+        post += "Новость без подробностей\n\n"
     post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
     return post
 
