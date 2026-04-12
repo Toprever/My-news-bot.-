@@ -13,10 +13,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from newspaper import Article
 
-# ========== НАСТРОЙКИ ==========
+# ========== НАСТРОЙКИ (ЗАМЕНИ НА СВОИ) ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
-# ===============================
+UNSPLASH_ACCESS_KEY = "AqS8-eoVpvoTexWP85LIaf-vEf6kSZajprjUeJBTdb8"
+# ================================================
 
 SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
@@ -24,8 +25,8 @@ SOURCES = [
     "https://lenta.ru/rss",
 ]
 
-CHECK_INTERVAL = 1
-POSTS_PER_CHECK = 3
+CHECK_INTERVAL = 3
+POSTS_PER_CHECK = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -54,6 +55,22 @@ async def get_session():
         session = aiohttp.ClientSession()
     return session
 
+async def search_unsplash_image(keywords):
+    try:
+        url = "https://api.unsplash.com/search/photos"
+        params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
+        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+        sess = await get_session()
+        async with sess.get(url, params=params, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data["results"]:
+                    img = random.choice(data["results"])
+                    return img["urls"]["regular"]
+    except Exception as e:
+        logging.error(f"Unsplash error: {e}")
+    return None
+
 async def fetch_rss_feed(url):
     try:
         sess = await get_session()
@@ -79,18 +96,12 @@ async def fetch_rss_feed(url):
         return []
 
 async def get_full_article(url):
-    """Загружает полный текст статьи и картинку через newspaper3k"""
     try:
         article = Article(url)
         article.download()
         article.parse()
-        
-        # Полный текст
         full_text = article.text
-        
-        # Картинка (если есть)
         top_image = article.top_image
-        
         return full_text, top_image
     except Exception as e:
         logging.error(f"Ошибка загрузки статьи {url}: {e}")
@@ -100,19 +111,21 @@ async def rewrite_news(news_item):
     title = news_item['title']
     url = news_item['url']
     
-    # Получаем полный текст и картинку
-    full_text, image_url = await get_full_article(url)
+    full_text, image_from_article = await get_full_article(url)
     
-    # Формируем пост
-    post = f"🔥 <b>НОВОСТЬ</b>\n\n"
-    post += f"<b>{title}</b>\n\n"
+    image_url = image_from_article
+    if not image_url:
+        keywords = ' '.join(title.split()[:5])
+        image_url = await search_unsplash_image(keywords)
+    
+    post = f"⚡️ <b>{title}</b>\n\n"
     
     if full_text:
         post += f"{full_text[:3000]}\n\n"
     else:
         post += f"Не удалось загрузить текст статьи.\n\n"
     
-    post += f'\n<a href="https://t.me/Sami_V_Ahye">СВА</a>'
+    post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
     
     return post, image_url
 
@@ -185,7 +198,6 @@ async def on_startup():
 async def echo(message: types.Message):
     await message.answer("Я работаю в фоне и пощу новости в канал")
 
-# Flask сервер
 app = Flask(__name__)
 
 @app.route('/')
