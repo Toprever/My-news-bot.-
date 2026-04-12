@@ -88,18 +88,16 @@ async def rewrite_with_groq(title, original_text):
 - Коротко, ёмко, без воды
 - В конце добавь 📷 СВА 📷
 
-Вот пример:
+Пример:
 🔺 СЕГОДНЯ ПОД ТОМСКОМ НЕКИЙ ПАВЕЛ СЕРГЕЕВ СБИЛ 67 БЕСПИЛОТНИКОВ 🔺
 
 Павел Сергеев - житель Томска, увлекающийся созданием аниматронных роботов и БПЛА создал новую технологию с помощью которой сбил ровно 67 хохлятских дронов
 
 📷 СВА 📷
 
-Теперь перепиши эту новость:
+Новость:
 Заголовок: {title}
-Текст: {original_text}
-
-Только текст поста, без лишних пояснений."""
+Текст: {original_text}"""
     
     try:
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -122,14 +120,26 @@ async def rewrite_with_groq(title, original_text):
         logging.error(f"Groq error: {e}")
     return None
 
+# Дефолтная картинка, если генерация не сработает
+DEFAULT_IMAGE = "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
+
 async def generate_image(prompt):
+    """Пытается сгенерировать картинку через бесплатный API"""
     try:
-        image_prompt = f"news illustration, {prompt}, realistic, high quality, cinematic lighting"
-        url = f"https://image.pollinations.ai/prompt/{image_prompt}?width=1080&height=720&nologo=true"
-        return url
+        # Кодируем запрос для URL
+        encoded = aiohttp.helpers.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=720"
+        
+        # Просто проверяем, что сервер отвечает
+        sess = await get_session()
+        async with sess.head(url, timeout=10) as resp:
+            if resp.status == 200:
+                return url
     except Exception as e:
-        logging.error(f"Image error: {e}")
-        return None
+        logging.error(f"Image generation error: {e}")
+    
+    # Если не получилось — возвращаем дефолтную картинку
+    return DEFAULT_IMAGE
 
 async def process_and_post():
     posted = load_posted()
@@ -165,18 +175,15 @@ async def process_and_post():
         image_url = await generate_image(news_item['title'])
         
         try:
-            if image_url:
-                photo = URLInputFile(image_url)
-                await bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=post_text, parse_mode="HTML")
-            else:
-                await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
+            photo = URLInputFile(image_url)
+            await bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=post_text, parse_mode="HTML")
             
             posted.add(news_item['url'])
             save_posted(posted)
-            logging.info(f"Опубликовано")
+            logging.info(f"Опубликовано: {news_item['title'][:50]}...")
             await asyncio.sleep(10)
         except Exception as e:
-            logging.error(f"Ошибка: {e}")
+            logging.error(f"Ошибка публикации: {e}")
 
 async def start_posting():
     while True:
