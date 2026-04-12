@@ -12,18 +12,18 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
 from bs4 import BeautifulSoup
 
-# ========== НАСТРОЙКИ (ТВОИ ДАННЫЕ) ==========
-BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
+# ========== НАСТРОЙКИ ==========
+BOT_TOKEN = "8678003507:AAFBQoHXJ6Mytg2hFj-CLE-sOvr5JPMMtj0"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
-# =============================================
+# ===============================
 
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
 ]
 
 CHECK_INTERVAL = 1
-POSTS_PER_CHECK = 50
+POSTS_PER_CHECK = 60
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -35,8 +35,11 @@ POSTED_FILE = "posted_news.json"
 
 def load_posted():
     if os.path.exists(POSTED_FILE):
-        with open(POSTED_FILE, 'r') as f:
-            return set(json.load(f))
+        try:
+            with open(POSTED_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            return set()
     return set()
 
 def save_posted(posted_set):
@@ -61,12 +64,12 @@ async def fetch_rss_feed(url):
             for item in soup.find_all('item')[:10]:
                 title = item.find('title')
                 title_text = title.text if title else ""
+                link = item.find('link')
+                link_url = link.text if link else ""
                 description = item.find('description')
                 desc_text = description.text if description else ""
                 desc_text = re.sub(r'<[^>]+>', '', desc_text)
                 desc_text = re.sub(r'\s+', ' ', desc_text).strip()
-                link = item.find('link')
-                link_url = link.text if link else ""
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
@@ -79,12 +82,14 @@ async def fetch_rss_feed(url):
         return []
 
 def get_emoji(title):
-    if re.search(r'путин|трамп|байден|кремль', title.lower()):
+    if re.search(r'путин|трамп|байден|кремль|депутат|госдума', title.lower()):
         return "💎"
-    if re.search(r'войн|арми|украин|дрон', title.lower()):
+    if re.search(r'войн|арми|украин|дрон|всу|кадыров', title.lower()):
         return "💥"
-    if re.search(r'рубл|доллар|нефт|газ', title.lower()):
+    if re.search(r'рубл|доллар|нефт|газ|денег', title.lower()):
         return "💰"
+    if re.search(r'авари|дтп|погиб|смерт|убийств|пожар', title.lower()):
+        return "🚨"
     return "🔺"
 
 def make_post(title, desc):
@@ -109,7 +114,6 @@ async def main_loop():
         news.extend(items)
         await asyncio.sleep(1)
     
-    # Убираем дубликаты
     uniq = []
     seen = set()
     for item in news:
@@ -121,7 +125,7 @@ async def main_loop():
     new_items = new_items[:POSTS_PER_CHECK]
     
     if not new_items:
-        logging.info("Нет новостей")
+        logging.info("Нет новых новостей")
         return
     
     for item in new_items:
