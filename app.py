@@ -11,24 +11,13 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
 from bs4 import BeautifulSoup
-import openai
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 # ===============================
-
-# Настройка клиента DeepSeek
-if DEEPSEEK_API_KEY:
-    deepseek_client = openai.OpenAI(
-        api_key=DEEPSEEK_API_KEY,
-        base_url="https://api.deepseek.com/v1"
-    )
-else:
-    deepseek_client = None
-    logging.warning("DEEPSEEK_API_KEY не задан")
 
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
@@ -36,7 +25,7 @@ SOURCES = [
     "https://tass.ru/rss",
 ]
 
-CHECK_INTERVAL = 1
+CHECK_INTERVAL = 60  # 1 час
 POSTS_PER_CHECK = 1
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -98,7 +87,7 @@ async def fetch_rss_feed(url):
 def get_emoji_by_title(title):
     title_lower = title.lower()
     if re.search(r'путин|трамп|байден|кремль|депутат|госдума|выборы', title_lower):
-        return "⚔️"
+        return "💎"
     if re.search(r'войн|арми|солдат|танк|обстрел|атака|взрыв|украин', title_lower):
         return "💥"
     if re.search(r'рубл|доллар|евро|нефт|газ|денег|бизнес', title_lower):
@@ -107,54 +96,51 @@ def get_emoji_by_title(title):
         return "🚨"
     return "🔺"
 
-async def expand_with_deepseek(title, description):
-    """Раскрывает тему заголовка через DeepSeek"""
-    if not deepseek_client:
-        return description if description and len(description) > 30 else None
+async def expand_with_huggingface(title):
+    if not HUGGINGFACE_API_KEY:
+        return None
     
-    prompt = f"""Ты пишешь новостной пост в Telegram. На основе заголовка напиши короткий текст (3-6 предложений), который полностью раскрывает суть новости. Пиши только факты, без воды, без фраз "по данным источника", без "продолжение следует". Заголовок не повторяй.
-
-Заголовок: {title}
-
-Текст поста:"""
+    prompt = f"Напиши короткий новостной пост на тему: {title}. 3-4 предложения, только факты, без воды."
     
     try:
-        response = await asyncio.to_thread(
-            deepseek_client.chat.completions.create,
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "Ты помощник, который пишет новостные посты. Пиши коротко, по делу, без воды."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=500
-        )
-        result = response.choices[0].message.content.strip()
-        if len(result) > 50:
-            return result
+        async with session.post(
+            "https://api-inference.huggingface.co/models/microsoft/phi-2",
+            headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
+            json={"inputs": prompt, "parameters": {"max_length": 200, "temperature": 0.7}},
+            timeout=30
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if isinstance(data, list) and len(data) > 0:
+                    text = data[0].get("generated_text", "")
+                else:
+                    text = data.get("generated_text", "") if isinstance(data, dict) else ""
+                text = text.replace(prompt, "").strip()
+                if len(text) > 50:
+                    return text
+            else:
+                logging.error(f"HF error {resp.status}")
     except Exception as e:
-        logging.error(f"DeepSeek error: {e}")
-    
-    return description if description and len(description) > 30 else None
-
-async def generate_image(title):
-    try:
-        keywords = re.sub(r'[^\w\s]', '', title)[:50]
-        encoded = aiohttp.helpers.quote(keywords)
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=720"
-        return url
-    except Exception:
-        return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
+        logging.error(f"HF error: {e}")
+    return None
 
 def format_post(title, body):
     emoji = get_emoji_by_title(title)
     post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
-    if body:
+    if body and len(body) > 30:
         post += f"{body}\n\n"
     else:
         post += "Подробнее по ссылке\n\n"
     post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
     return post
+
+async def generate_image(title):
+    try:
+        keywords = re.sub(r'[^\w\s]', '', title)[:50]
+        encoded = aiohttp.helpers.quote(keywords)
+        return f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=720"
+    except Exception:
+        return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
 
 async def process_and_post():
     posted = load_posted()
@@ -183,9 +169,8 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        body = await expand_with_deepseek(news_item['title'], news_item['description'])
+        body = await expand_with_huggingface(news_item['title'])
         post_text = format_post(news_item['title'], body)
-        
         image_url = await generate_image(news_item['title'])
         
         try:
@@ -195,7 +180,7 @@ async def process_and_post():
             posted.add(news_item['url'])
             save_posted(posted)
             logging.info(f"Опубликовано")
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
         except Exception as e:
             logging.error(f"Ошибка публикации: {e}")
 
