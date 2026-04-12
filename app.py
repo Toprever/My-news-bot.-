@@ -10,22 +10,13 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
-import google.generativeai as genai
+from bs4 import BeautifulSoup
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
-CHANNEL_ID = "Sam_V_Shocke"  # Новый username канала (без @)
-CHANNEL_LINK = "https://t.me/Sam_V_Shocke"  # Полная ссылка
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+CHANNEL_ID = "Sam_V_Shocke"
+CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
 # ===============================
-
-# Настройка Gemini
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-else:
-    model = None
-    logging.warning("GEMINI_API_KEY не задан")
 
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
@@ -34,7 +25,6 @@ SOURCES = [
 
 CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 2
-MAX_TEXT_LENGTH = 1200
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -65,7 +55,6 @@ async def get_session():
 
 async def fetch_rss_feed(url):
     try:
-        from bs4 import BeautifulSoup
         sess = await get_session()
         async with sess.get(url, timeout=15) as resp:
             if resp.status != 200:
@@ -78,9 +67,14 @@ async def fetch_rss_feed(url):
                 title_text = title.text if title else ""
                 link = item.find('link')
                 link_url = link.text if link else ""
+                description = item.find('description')
+                desc_text = description.text if description else ""
+                desc_text = re.sub(r'<[^>]+>', '', desc_text)
+                desc_text = re.sub(r'\s+', ' ', desc_text).strip()
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
+                        'description': desc_text[:400],
                         'url': link_url,
                     })
             return items
@@ -100,54 +94,24 @@ def get_emoji_by_title(title):
         return "🚨"
     return "🔺"
 
-async def expand_with_gemini(title):
-    """Раскрывает тему заголовка через Gemini"""
-    if not model:
-        return None
-    
-    prompt = f"""Напиши короткий, интересный текст новости на основе этого заголовка.
-
-Заголовок: {title}
-
-Требования:
-- 3-6 предложений
-- Раскрой суть, добавь контекст
-- Пиши без воды, без мусора, без фраз "по данным источника"
-- Только факты и логика
-
-Текст новости:"""
-    
-    try:
-        response = await asyncio.to_thread(
-            model.generate_content,
-            prompt
-        )
-        text = response.text.strip()
-        if len(text) > MAX_TEXT_LENGTH:
-            text = text[:MAX_TEXT_LENGTH] + "..."
-        return text
-    except Exception as e:
-        logging.error(f"Gemini error: {e}")
-        return None
+def format_post(title, description):
+    emoji = get_emoji_by_title(title)
+    post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
+    if description and len(description) > 30:
+        post += f"{description}\n\n"
+    else:
+        post += "Подробнее по ссылке\n\n"
+    post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
+    return post
 
 async def generate_image(title):
-    """Генерирует картинку по теме"""
     try:
         keywords = re.sub(r'[^\w\s]', '', title)[:50]
         encoded = aiohttp.helpers.quote(keywords)
         url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=720"
         return url
-    except Exception as e:
-        logging.error(f"Image error: {e}")
+    except Exception:
         return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
-
-def format_post(title, body):
-    """Форматирует пост с новой припиской ⚡СВШ⚡"""
-    emoji = get_emoji_by_title(title)
-    post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
-    post += f"{body}\n\n"
-    post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
-    return post
 
 async def process_and_post():
     posted = load_posted()
@@ -176,11 +140,7 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        expanded_text = await expand_with_gemini(news_item['title'])
-        if not expanded_text:
-            expanded_text = f"Новость: {news_item['title']}"
-        
-        post_text = format_post(news_item['title'], expanded_text)
+        post_text = format_post(news_item['title'], news_item['description'])
         image_url = await generate_image(news_item['title'])
         
         try:
