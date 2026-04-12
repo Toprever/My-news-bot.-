@@ -10,12 +10,22 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
+import google.generativeai as genai
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
-CHANNEL_ID = "@Sami_V_Ahye"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+CHANNEL_ID = "Sam_V_Shocke"  # Новый username канала (без @)
+CHANNEL_LINK = "https://t.me/Sam_V_Shocke"  # Полная ссылка
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 # ===============================
+
+# Настройка Gemini
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+    logging.warning("GEMINI_API_KEY не задан")
 
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
@@ -24,6 +34,7 @@ SOURCES = [
 
 CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 2
+MAX_TEXT_LENGTH = 1200
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -67,12 +78,9 @@ async def fetch_rss_feed(url):
                 title_text = title.text if title else ""
                 link = item.find('link')
                 link_url = link.text if link else ""
-                description = item.find('description')
-                desc_text = description.text if description else ""
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text[:500],
                         'url': link_url,
                     })
             return items
@@ -80,66 +88,66 @@ async def fetch_rss_feed(url):
         logging.error(f"RSS error {url}: {e}")
         return []
 
-async def rewrite_with_groq(title, original_text):
-    prompt = f"""Перепиши эту новость в стиле для Telegram-канала. Используй такие же приёмы: 
-- ЗАГЛАВНЫЕ БУКВЫ в начале
-- Эмодзи 🔺 или другой по смыслу
-- Эмоциональный стиль
-- Коротко, ёмко, без воды
-- В конце добавь 📷 СВА 📷
+def get_emoji_by_title(title):
+    title_lower = title.lower()
+    if re.search(r'путин|трамп|байден|кремль|депутат|госдума|выборы', title_lower):
+        return "⚔️"
+    if re.search(r'войн|арми|солдат|танк|обстрел|атака|взрыв|украин', title_lower):
+        return "💥"
+    if re.search(r'рубл|доллар|евро|нефт|газ|денег|бизнес', title_lower):
+        return "💰"
+    if re.search(r'авари|дтп|погиб|смерт|убийств|пожар', title_lower):
+        return "🚨"
+    return "🔺"
 
-Пример:
-🔺 СЕГОДНЯ ПОД ТОМСКОМ НЕКИЙ ПАВЕЛ СЕРГЕЕВ СБИЛ 67 БЕСПИЛОТНИКОВ 🔺
+async def expand_with_gemini(title):
+    """Раскрывает тему заголовка через Gemini"""
+    if not model:
+        return None
+    
+    prompt = f"""Напиши короткий, интересный текст новости на основе этого заголовка.
 
-Павел Сергеев - житель Томска, увлекающийся созданием аниматронных роботов и БПЛА создал новую технологию с помощью которой сбил ровно 67 хохлятских дронов
-
-📷 СВА 📷
-
-Новость:
 Заголовок: {title}
-Текст: {original_text}"""
+
+Требования:
+- 3-6 предложений
+- Раскрой суть, добавь контекст
+- Пиши без воды, без мусора, без фраз "по данным источника"
+- Только факты и логика
+
+Текст новости:"""
     
     try:
-        url = "https://api.groq.com/openai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7,
-            "max_tokens": 500
-        }
-        sess = await get_session()
-        async with sess.post(url, json=payload, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+        response = await asyncio.to_thread(
+            model.generate_content,
+            prompt
+        )
+        text = response.text.strip()
+        if len(text) > MAX_TEXT_LENGTH:
+            text = text[:MAX_TEXT_LENGTH] + "..."
+        return text
     except Exception as e:
-        logging.error(f"Groq error: {e}")
-    return None
+        logging.error(f"Gemini error: {e}")
+        return None
 
-# Дефолтная картинка, если генерация не сработает
-DEFAULT_IMAGE = "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
-
-async def generate_image(prompt):
-    """Пытается сгенерировать картинку через бесплатный API"""
+async def generate_image(title):
+    """Генерирует картинку по теме"""
     try:
-        # Кодируем запрос для URL
-        encoded = aiohttp.helpers.quote(prompt)
+        keywords = re.sub(r'[^\w\s]', '', title)[:50]
+        encoded = aiohttp.helpers.quote(keywords)
         url = f"https://image.pollinations.ai/prompt/{encoded}?width=1080&height=720"
-        
-        # Просто проверяем, что сервер отвечает
-        sess = await get_session()
-        async with sess.head(url, timeout=10) as resp:
-            if resp.status == 200:
-                return url
+        return url
     except Exception as e:
-        logging.error(f"Image generation error: {e}")
-    
-    # Если не получилось — возвращаем дефолтную картинку
-    return DEFAULT_IMAGE
+        logging.error(f"Image error: {e}")
+        return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
+
+def format_post(title, body):
+    """Форматирует пост с новой припиской ⚡СВШ⚡"""
+    emoji = get_emoji_by_title(title)
+    post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
+    post += f"{body}\n\n"
+    post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
+    return post
 
 async def process_and_post():
     posted = load_posted()
@@ -168,19 +176,20 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        post_text = await rewrite_with_groq(news_item['title'], news_item['description'])
-        if not post_text:
-            post_text = f"🔺 {news_item['title'].upper()} 🔺\n\n{news_item['description']}\n\n📷 СВА 📷"
+        expanded_text = await expand_with_gemini(news_item['title'])
+        if not expanded_text:
+            expanded_text = f"Новость: {news_item['title']}"
         
+        post_text = format_post(news_item['title'], expanded_text)
         image_url = await generate_image(news_item['title'])
         
         try:
             photo = URLInputFile(image_url)
-            await bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=post_text, parse_mode="HTML")
+            await bot.send_photo(chat_id=f"@{CHANNEL_ID}", photo=photo, caption=post_text, parse_mode="HTML")
             
             posted.add(news_item['url'])
             save_posted(posted)
-            logging.info(f"Опубликовано: {news_item['title'][:50]}...")
+            logging.info(f"Опубликовано")
             await asyncio.sleep(10)
         except Exception as e:
             logging.error(f"Ошибка публикации: {e}")
