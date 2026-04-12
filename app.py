@@ -24,7 +24,7 @@ SOURCES = [
     "https://lenta.ru/rss",
 ]
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 3
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -33,8 +33,21 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
 session = None
 
-# ВРЕМЕННОЕ ХРАНИЛИЩЕ (в памяти, но сбрасывается при перезапуске)
-posted_urls = set()
+# Файл для хранения отправленных ссылок
+POSTED_FILE = "posted_news.json"
+
+def load_posted():
+    if os.path.exists(POSTED_FILE):
+        try:
+            with open(POSTED_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            return set()
+    return set()
+
+def save_posted(posted_set):
+    with open(POSTED_FILE, 'w') as f:
+        json.dump(list(posted_set), f)
 
 async def get_session():
     global session
@@ -67,7 +80,7 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:10]:  # берём больше, чтобы было из чего выбрать
+            for item in soup.find_all('item')[:10]:
                 title = item.find('title')
                 title_text = title.text if title else ""
                 description = item.find('description')
@@ -89,12 +102,12 @@ async def fetch_rss_feed(url):
 async def rewrite_news(news_item):
     title = news_item['title']
     desc = news_item['description']
-    post = f"🔥 <b>СВОДКА</b>\n\n"
+    post = f"🔥 <b>НОВОСТЬ</b>\n\n"
     post += f"<b>{title}</b>\n\n"
     if desc:
-        # Берём больше текста
-        post += f"{desc[:500]}\n\n"
-    # Ссылку НЕ добавляем
+        post += f"{desc[:700]}\n\n"
+    # Добавляем кликабельное СВА в конце
+    post += f'\n<a href="https://t.me/Sami_V_Ahye">СВА</a>'
     return post
 
 async def collect_news():
@@ -104,7 +117,6 @@ async def collect_news():
         all_news.extend(news_items)
         await asyncio.sleep(1)
     
-    # Убираем дубликаты по заголовку
     unique_news = []
     seen_titles = set()
     for item in all_news:
@@ -112,20 +124,16 @@ async def collect_news():
         if title_short not in seen_titles:
             seen_titles.add(title_short)
             unique_news.append(item)
-    
-    # Сортируем по дате (если есть) — новейшие сверху
-    # Упрощённо: оставляем как есть, порядок из RSS
     return unique_news
 
 async def process_and_post():
-    global posted_urls
+    posted = load_posted()
     
     logging.info("Сбор новостей...")
     all_news = await collect_news()
     logging.info(f"Найдено {len(all_news)} уникальных новостей")
     
-    # Отбираем новые (которых ещё нет в памяти)
-    new_news = [n for n in all_news if n['url'] not in posted_urls]
+    new_news = [n for n in all_news if n['url'] not in posted]
     new_news = new_news[:POSTS_PER_CHECK]
     
     if not new_news:
@@ -150,10 +158,10 @@ async def process_and_post():
             else:
                 await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             
-            posted_urls.add(news_item['url'])
+            posted.add(news_item['url'])
+            save_posted(posted)
             logging.info(f"Опубликовано: {news_item['title'][:50]}...")
             await asyncio.sleep(5)
-            
         except Exception as e:
             logging.error(f"Ошибка публикации: {e}")
 
