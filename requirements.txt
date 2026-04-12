@@ -3,4 +3,5 @@ aiohttp
 beautifulsoup4
 flask
 lxml
-openai
+huggingface_hub
+transformers
