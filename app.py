@@ -3,33 +3,28 @@ import logging
 import json
 import os
 import re
-import random
 import aiohttp
 from datetime import datetime
-from bs4 import BeautifulSoup
 from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import FSInputFile
-import tempfile
+from aiogram.types import URLInputFile
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
-UNSPLASH_ACCESS_KEY = "AqS8-eoVpvoTexWP85LIaf-vEf6kSZajprjUeJBTdb8"
+GROQ_API_KEY = "gsk_your_key_here"  # Получи бесплатно на console.groq.com
 # ===============================
 
+# Берём новости из RSS этих каналов
 SOURCES = [
-    "https://ria.ru/export/rss2/index.xml",
-    "https://tass.ru/rss",
-    "https://lenta.ru/rss",
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
+    "https://ria.ru/export/rss2/index.xml",
 ]
 
 CHECK_INTERVAL = 1
-POSTS_PER_CHECK = 3
-MAX_TEXT_LENGTH = 1100
+POSTS_PER_CHECK = 2
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -58,46 +53,9 @@ async def get_session():
         session = aiohttp.ClientSession()
     return session
 
-async def search_unsplash_image(keywords):
-    try:
-        url = "https://api.unsplash.com/search/photos"
-        params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
-        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
-        sess = await get_session()
-        async with sess.get(url, params=params, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data["results"]:
-                    img = random.choice(data["results"])
-                    return img["urls"]["regular"]
-    except Exception as e:
-        logging.error(f"Unsplash error: {e}")
-    return None
-
-async def fetch_first_paragraph(url):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        sess = await get_session()
-        async with sess.get(url, timeout=20, headers=headers) as resp:
-            if resp.status != 200:
-                return None
-            html = await resp.text()
-            soup = BeautifulSoup(html, 'html.parser')
-            for script in soup(["script", "style", "nav", "header", "footer", "aside"]):
-                script.decompose()
-            paragraphs = soup.find_all('p')
-            for p in paragraphs:
-                text = p.get_text().strip()
-                if len(text) > 100 and not re.search(r'фото|видео|подписаться|реклама|cookie', text, re.I):
-                    text = re.sub(r'\s+', ' ', text)
-                    return text[:MAX_TEXT_LENGTH]
-            return None
-    except Exception as e:
-        logging.error(f"Ошибка загрузки страницы {url}: {e}")
-        return None
-
 async def fetch_rss_feed(url):
     try:
+        from bs4 import BeautifulSoup
         sess = await get_session()
         async with sess.get(url, timeout=15) as resp:
             if resp.status != 200:
@@ -105,19 +63,17 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:15]:
+            for item in soup.find_all('item')[:5]:
                 title = item.find('title')
                 title_text = title.text if title else ""
-                description = item.find('description')
-                desc_text = description.text if description else ""
-                desc_text = re.sub(r'<[^>]+>', '', desc_text)
-                desc_text = re.sub(r'\s+', ' ', desc_text).strip()
                 link = item.find('link')
                 link_url = link.text if link else ""
+                description = item.find('description')
+                desc_text = description.text if description else ""
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text,
+                        'description': desc_text[:500],
                         'url': link_url,
                     })
             return items
@@ -125,85 +81,79 @@ async def fetch_rss_feed(url):
         logging.error(f"RSS error {url}: {e}")
         return []
 
-def clean_text(text):
-    if not text:
-        return ""
-    text = re.sub(r'\s+', ' ', text)
-    garbage_phrases = [
-        r'Читать \w+\.ru в', r'Архивное фото', r'Чтобы оставить реакцию.*',
-        r'Обсудить', r'Рекомендуем', r'Лента новостей', r'loader', r'просмотров',
-        r'Отправить еще раз', r'Telegram', r'ВКонтакте', r'Одноклассники', r'X',
-    ]
-    for phrase in garbage_phrases:
-        text = re.sub(phrase, '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+async def rewrite_with_groq(title, original_text):
+    """Переписывает новость в стиле твоего идеального поста"""
+    prompt = f"""Перепиши эту новость в стиле для Telegram-канала. Используй такие же приёмы: 
+- ЗАГЛАВНЫЕ БУКВЫ в начале
+- Эмодзи 🔺 или другой по смыслу
+- Эмоциональный, патриотичный стиль как в примере
+- Коротко, ёмко, без воды
+- Добавь в конце строку с 📷 СВА 📷
 
-def get_emoji_by_title(title):
-    title_lower = title.lower()
-    if re.search(r'путин|трамп|байден|политик|кремль|депутат|госдума|выборы', title_lower):
-        return "🏛️"
-    if re.search(r'войн|арми|солдат|танк|обстрел|атака|взрыв|украин|израиль|палестин|иран', title_lower):
-        return "💥"
-    if re.search(r'рубл|доллар|евро|нефт|газ|денег|бизнес|крипт|биткоин', title_lower):
-        return "💰"
-    if re.search(r'авари|дтп|погиб|смерт|убийств|пожар|наводн|землетряс', title_lower):
-        return "🚨"
-    if re.search(r'пасх|рождеств|праздник|поздравил', title_lower):
-        return "🐣"
-    return "⚡️"
+Вот пример:
+🔺 СЕГОДНЯ ПОД ТОМСКОМ НЕКИЙ ПАВЕЛ СЕРГЕЕВ СБИЛ 67 БЕСПИЛОТНИКОВ 🔺
 
-async def rewrite_news(news_item):
-    title = news_item['title']
-    url = news_item['url']
-    
-    page_text = await fetch_first_paragraph(url)
-    if page_text:
-        final_text = clean_text(page_text)
-    else:
-        final_text = clean_text(news_item.get('description', ''))
-    
-    if not final_text or len(final_text) < 50:
-        final_text = "Подробнее по ссылке"
-    
-    if len(final_text) > MAX_TEXT_LENGTH:
-        final_text = final_text[:MAX_TEXT_LENGTH] + "..."
-    
-    emoji = get_emoji_by_title(title)
-    
-    post = f"{emoji} <b>{title}</b>\n\n"
-    post += f"{final_text}\n\n"
-    post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
-    
-    keywords = ' '.join(title.split()[:5])
-    image_url = await search_unsplash_image(keywords)
-    
-    return post, image_url
+Павел Сергеев - житель Томска, увлекающийся созданием аниматронных роботов и БПЛА создал новую технологию с помощью которой сбил ровно 67 хохлятских дронов
 
-async def collect_news():
+📷 СВА 📷
+
+Теперь перепиши эту новость:
+Заголовок: {title}
+Текст: {original_text}
+
+Только текст поста, без лишних пояснений."""
+    
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.7,
+            "max_tokens": 500
+        }
+        sess = await get_session()
+        async with sess.post(url, json=payload, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                return data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        logging.error(f"Groq error: {e}")
+    return None
+
+async def generate_image(prompt):
+    """Генерирует картинку через бесплатный Pollinations AI"""
+    try:
+        # Создаём запрос для картинки на основе заголовка
+        image_prompt = f"news illustration, {prompt}, realistic, high quality"
+        url = f"https://image.pollinations.ai/prompt/{image_prompt}?width=1080&height=720&nologo=true"
+        return url
+    except Exception as e:
+        logging.error(f"Image generation error: {e}")
+        return None
+
+async def process_and_post():
+    posted = load_posted()
+    
+    logging.info("Сбор новостей...")
     all_news = []
     for source in SOURCES:
         news_items = await fetch_rss_feed(source)
         all_news.extend(news_items)
         await asyncio.sleep(1)
     
+    # Убираем дубликаты
     unique_news = []
-    seen_titles = set()
+    seen = set()
     for item in all_news:
-        title_short = item['title'][:50]
-        if title_short not in seen_titles:
-            seen_titles.add(title_short)
+        if item['title'][:50] not in seen:
+            seen.add(item['title'][:50])
             unique_news.append(item)
-    return unique_news
-
-async def process_and_post():
-    posted = load_posted()
     
-    logging.info("Сбор новостей...")
-    all_news = await collect_news()
-    logging.info(f"Найдено {len(all_news)} уникальных новостей")
-    
-    new_news = [n for n in all_news if n['url'] not in posted]
+    new_news = [n for n in unique_news if n['url'] not in posted]
     new_news = new_news[:POSTS_PER_CHECK]
     
     if not new_news:
@@ -211,32 +161,27 @@ async def process_and_post():
         return
     
     for news_item in new_news:
-        post_text, image_url = await rewrite_news(news_item)
+        logging.info(f"Обработка: {news_item['title'][:50]}...")
+        
+        # Переписываем новость через Groq
+        post_text = await rewrite_with_groq(news_item['title'], news_item['description'])
+        if not post_text:
+            post_text = f"🔺 {news_item['title'].upper()} 🔺\n\n{news_item['description']}\n\n📷 СВА 📷"
+        
+        # Генерируем картинку
+        image_url = await generate_image(news_item['title'])
         
         try:
-            # Дефолтная картинка если нет
-            if not image_url:
-                image_url = "https://images.unsplash.com/photo-1586953208448-b95a79798f07?w=1200"
-            
-            sess = await get_session()
-            async with sess.get(image_url) as img_resp:
-                if img_resp.status == 200:
-                    photo_data = await img_resp.read()
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_file:
-                        tmp_file.write(photo_data)
-                        tmp_path = tmp_file.name
-                    
-                    # Используем FSInputFile вместо InputFile
-                    photo_file = FSInputFile(tmp_path)
-                    await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_file, caption=post_text, parse_mode="HTML")
-                    os.unlink(tmp_path)
-                else:
-                    await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
+            if image_url:
+                photo = URLInputFile(image_url)
+                await bot.send_photo(chat_id=CHANNEL_ID, photo=photo, caption=post_text, parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             
             posted.add(news_item['url'])
             save_posted(posted)
-            logging.info(f"Опубликовано: {news_item['title'][:50]}...")
-            await asyncio.sleep(5)
+            logging.info(f"Опубликовано")
+            await asyncio.sleep(10)
         except Exception as e:
             logging.error(f"Ошибка публикации: {e}")
 
@@ -255,21 +200,16 @@ async def on_startup():
 
 @dp.message()
 async def echo(message: types.Message):
-    await message.answer("Я работаю в фоне и пощу новости в канал")
+    await message.answer("Я работаю")
 
 app = Flask(__name__)
-
 @app.route('/')
-@app.route('/health')
 def health():
-    return "OK", 200
-
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+    return "OK"
 
 async def main():
     from threading import Thread
-    Thread(target=run_flask, daemon=True).start()
+    Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000))), daemon=True).start()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
