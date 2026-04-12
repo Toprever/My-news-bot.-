@@ -3,7 +3,6 @@ import logging
 import json
 import os
 import re
-import random
 import aiohttp
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -11,13 +10,12 @@ from flask import Flask
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from newspaper import Article
 
-# ========== НАСТРОЙКИ (ЗАМЕНИ НА СВОИ) ==========
+# ========== НАСТРОЙКИ (С ТВОИМИ ДАННЫМИ) ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
-UNSPLASH_ACCESS_KEY = "AqS8-eoVpvoTexWP85LIaf-vEf6kSZajprjUeJBTdb8"
-# ================================================
+FIRECRAWL_API_KEY = "fc-f01a96f6246949ccb48af5598203a459"
+# =================================================
 
 SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
@@ -25,8 +23,8 @@ SOURCES = [
     "https://lenta.ru/rss",
 ]
 
-CHECK_INTERVAL = 3
-POSTS_PER_CHECK = 5
+CHECK_INTERVAL = 1
+POSTS_PER_CHECK = 3
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -55,22 +53,6 @@ async def get_session():
         session = aiohttp.ClientSession()
     return session
 
-async def search_unsplash_image(keywords):
-    try:
-        url = "https://api.unsplash.com/search/photos"
-        params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
-        headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
-        sess = await get_session()
-        async with sess.get(url, params=params, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data["results"]:
-                    img = random.choice(data["results"])
-                    return img["urls"]["regular"]
-    except Exception as e:
-        logging.error(f"Unsplash error: {e}")
-    return None
-
 async def fetch_rss_feed(url):
     try:
         sess = await get_session()
@@ -95,35 +77,55 @@ async def fetch_rss_feed(url):
         logging.error(f"RSS error {url}: {e}")
         return []
 
-async def get_full_article(url):
+async def scrape_with_firecrawl(url):
+    """Отправляет URL в Firecrawl и получает текст + картинку"""
+    api_url = "https://api.firecrawl.dev/v1/scrape"
+    headers = {
+        "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": url,
+        "formats": ["markdown"],
+        "onlyMainContent": True
+    }
+    
     try:
-        article = Article(url)
-        article.download()
-        article.parse()
-        full_text = article.text
-        top_image = article.top_image
-        return full_text, top_image
+        sess = await get_session()
+        async with sess.post(api_url, json=payload, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if data.get("success"):
+                    content = data.get("data", {}).get("markdown", "")
+                    # Пробуем вытащить первую картинку из markdown
+                    img_match = re.search(r'!\[.*?\]\((https?://[^\s)]+)\)', content)
+                    image_url = img_match.group(1) if img_match else None
+                    # Чистим текст от markdown-разметки
+                    clean_text = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+                    clean_text = re.sub(r'\[.*?\]\(.*?\)', '', clean_text)
+                    clean_text = re.sub(r'#{1,6}\s*', '', clean_text)
+                    clean_text = '\n'.join(line for line in clean_text.splitlines() if line.strip())
+                    return clean_text[:3000], image_url
+                else:
+                    logging.error(f"Firecrawl error: {data}")
+            else:
+                logging.error(f"Firecrawl HTTP {resp.status}: {await resp.text()}")
     except Exception as e:
-        logging.error(f"Ошибка загрузки статьи {url}: {e}")
-        return None, None
+        logging.error(f"Firecrawl error for {url}: {e}")
+    return None, None
 
 async def rewrite_news(news_item):
     title = news_item['title']
     url = news_item['url']
     
-    full_text, image_from_article = await get_full_article(url)
-    
-    image_url = image_from_article
-    if not image_url:
-        keywords = ' '.join(title.split()[:5])
-        image_url = await search_unsplash_image(keywords)
+    full_text, image_url = await scrape_with_firecrawl(url)
     
     post = f"⚡️ <b>{title}</b>\n\n"
     
     if full_text:
-        post += f"{full_text[:3000]}\n\n"
+        post += f"{full_text}\n\n"
     else:
-        post += f"Не удалось загрузить текст статьи.\n\n"
+        post += f"Не удалось загрузить полный текст.\n\n"
     
     post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
     
