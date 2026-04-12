@@ -12,47 +12,35 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 
-# ========== НАСТРОЙКИ (ТВОИ ДАННЫЕ) ==========
+# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
 UNSPLASH_ACCESS_KEY = "AqS8-eoVpvoTexWP85LIaf-vEf6kSZajprjUeJBTdb8"
-# =============================================
+# ===============================
 
-# Источники новостей
 SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
     "https://tass.ru/rss",
     "https://lenta.ru/rss",
 ]
 
-CHECK_INTERVAL = 2
-POSTS_PER_CHECK = 5
+CHECK_INTERVAL = 30
+POSTS_PER_CHECK = 3
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
-
-# Сессия будет создана позже, в асинхронном контексте
 session = None
+
+# ВРЕМЕННОЕ ХРАНИЛИЩЕ (в памяти, но сбрасывается при перезапуске)
+posted_urls = set()
 
 async def get_session():
     global session
     if session is None:
         session = aiohttp.ClientSession()
     return session
-
-POSTED_FILE = "posted_news.json"
-
-def load_posted():
-    if os.path.exists(POSTED_FILE):
-        with open(POSTED_FILE, 'r') as f:
-            return set(json.load(f))
-    return set()
-
-def save_posted(posted_set):
-    with open(POSTED_FILE, 'w') as f:
-        json.dump(list(posted_set), f)
 
 async def search_unsplash_image(keywords):
     try:
@@ -79,7 +67,7 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:5]:
+            for item in soup.find_all('item')[:10]:  # берём больше, чтобы было из чего выбрать
                 title = item.find('title')
                 title_text = title.text if title else ""
                 description = item.find('description')
@@ -90,7 +78,7 @@ async def fetch_rss_feed(url):
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text[:200],
+                        'description': desc_text,
                         'url': link_url,
                     })
             return items
@@ -101,11 +89,12 @@ async def fetch_rss_feed(url):
 async def rewrite_news(news_item):
     title = news_item['title']
     desc = news_item['description']
-    post = f"🔥 <b>НОВОСТЬ</b>\n\n"
+    post = f"🔥 <b>СВОДКА</b>\n\n"
     post += f"<b>{title}</b>\n\n"
     if desc:
-        post += f"{desc[:150]}...\n\n"
-    post += f"📌 <a href='{news_item['url']}'>Читать полностью</a>\n\n"
+        # Берём больше текста
+        post += f"{desc[:500]}\n\n"
+    # Ссылку НЕ добавляем
     return post
 
 async def collect_news():
@@ -114,30 +103,41 @@ async def collect_news():
         news_items = await fetch_rss_feed(source)
         all_news.extend(news_items)
         await asyncio.sleep(1)
+    
+    # Убираем дубликаты по заголовку
     unique_news = []
     seen_titles = set()
     for item in all_news:
-        title_short = item['title'][:40]
+        title_short = item['title'][:50]
         if title_short not in seen_titles:
             seen_titles.add(title_short)
             unique_news.append(item)
+    
+    # Сортируем по дате (если есть) — новейшие сверху
+    # Упрощённо: оставляем как есть, порядок из RSS
     return unique_news
 
 async def process_and_post():
-    posted = load_posted()
+    global posted_urls
+    
     logging.info("Сбор новостей...")
     all_news = await collect_news()
-    logging.info(f"Найдено {len(all_news)} новостей")
-    new_news = [n for n in all_news if n['url'] not in posted]
+    logging.info(f"Найдено {len(all_news)} уникальных новостей")
+    
+    # Отбираем новые (которых ещё нет в памяти)
+    new_news = [n for n in all_news if n['url'] not in posted_urls]
     new_news = new_news[:POSTS_PER_CHECK]
+    
     if not new_news:
-        logging.info("Новых нет")
+        logging.info("Новых новостей нет")
         return
+    
     for news_item in new_news:
         post_text = await rewrite_news(news_item)
-        post_text += f'\n<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>'
+        
         keywords = ' '.join(news_item['title'].split()[:4])
         image_url = await search_unsplash_image(keywords)
+        
         try:
             if image_url:
                 sess = await get_session()
@@ -149,10 +149,11 @@ async def process_and_post():
                         await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
             else:
                 await bot.send_message(chat_id=CHANNEL_ID, text=post_text, parse_mode="HTML")
-            posted.add(news_item['url'])
-            save_posted(posted)
+            
+            posted_urls.add(news_item['url'])
             logging.info(f"Опубликовано: {news_item['title'][:50]}...")
             await asyncio.sleep(5)
+            
         except Exception as e:
             logging.error(f"Ошибка публикации: {e}")
 
@@ -171,9 +172,9 @@ async def on_startup():
 
 @dp.message()
 async def echo(message: types.Message):
-    await message.answer("Я работаю в фоне и пощу новости в канал")
+    await message.answer("Я бот для автоматических постов. Просто работаю в фоне.")
 
-# Flask сервер для Render (чтобы бот не засыпал)
+# Flask сервер
 app = Flask(__name__)
 
 @app.route('/')
