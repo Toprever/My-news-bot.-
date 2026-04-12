@@ -16,7 +16,6 @@ from bs4 import BeautifulSoup
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
-HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 # ===============================
 
 SOURCES = [
@@ -76,7 +75,7 @@ async def fetch_rss_feed(url):
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text[:500],
+                        'description': desc_text[:400],
                         'url': link_url,
                     })
             return items
@@ -96,43 +95,12 @@ def get_emoji_by_title(title):
         return "🚨"
     return "🔺"
 
-async def expand_with_huggingface(title):
-    if not HUGGINGFACE_API_KEY:
-        return None
-    
-    prompt = f"Напиши короткий новостной пост на тему: {title}. 3-4 предложения, только факты, без воды."
-    
-    try:
-        sess = await get_session()
-        async with sess.post(
-            "https://api-inference.huggingface.co/models/microsoft/phi-2",
-            headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
-            json={"inputs": prompt, "parameters": {"max_length": 200, "temperature": 0.7}},
-            timeout=30
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if isinstance(data, list) and len(data) > 0:
-                    text = data[0].get("generated_text", "")
-                else:
-                    text = data.get("generated_text", "") if isinstance(data, dict) else ""
-                text = text.replace(prompt, "").strip()
-                if len(text) > 50:
-                    return text
-            else:
-                error_text = await resp.text()
-                logging.error(f"HF error {resp.status}: {error_text}")
-    except Exception as e:
-        logging.error(f"HF error: {e}")
-    return None
-
-def format_post(title, body):
+def format_post(title, description):
     emoji = get_emoji_by_title(title)
     post = f"<b>{emoji} {title.upper()} {emoji}</b>\n\n"
-    if body and len(body) > 30:
-        post += f"{body}\n\n"
+    if description and len(description) > 30:
+        post += f"{description}\n\n"
     else:
-        # Если нейросеть не сработала, используем заглушку
         post += "Новость без подробностей\n\n"
     post += f'⚡<a href="{CHANNEL_LINK}">СВШ</a>⚡'
     return post
@@ -172,8 +140,7 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        body = await expand_with_huggingface(news_item['title'])
-        post_text = format_post(news_item['title'], body)
+        post_text = format_post(news_item['title'], news_item['description'])
         image_url = await generate_image(news_item['title'])
         
         try:
