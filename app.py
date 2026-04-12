@@ -32,6 +32,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
+
+# Сессия будет создана позже, в асинхронном контексте
 session = None
 
 async def get_session():
@@ -57,7 +59,8 @@ async def search_unsplash_image(keywords):
         url = "https://api.unsplash.com/search/photos"
         params = {"query": keywords, "per_page": 3, "orientation": "landscape"}
         headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
-        async with session.get(url, params=params, headers=headers) as resp:
+        sess = await get_session()
+        async with sess.get(url, params=params, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
                 if data["results"]:
@@ -69,7 +72,8 @@ async def search_unsplash_image(keywords):
 
 async def fetch_rss_feed(url):
     try:
-        async with session.get(url, timeout=15) as resp:
+        sess = await get_session()
+        async with sess.get(url, timeout=15) as resp:
             if resp.status != 200:
                 return []
             content = await resp.text()
@@ -136,7 +140,8 @@ async def process_and_post():
         image_url = await search_unsplash_image(keywords)
         try:
             if image_url:
-                async with session.get(image_url) as img_resp:
+                sess = await get_session()
+                async with sess.get(image_url) as img_resp:
                     if img_resp.status == 200:
                         photo_data = await img_resp.read()
                         await bot.send_photo(chat_id=CHANNEL_ID, photo=photo_data, caption=post_text, parse_mode="HTML")
