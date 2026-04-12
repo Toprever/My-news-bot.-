@@ -32,7 +32,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
-session = aiohttp.ClientSession()
+session = None
+
+async def get_session():
+    global session
+    if session is None:
+        session = aiohttp.ClientSession()
+    return session
 
 POSTED_FILE = "posted_news.json"
 
