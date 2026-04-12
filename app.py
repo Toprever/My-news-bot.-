@@ -14,10 +14,9 @@ from aiogram.types import URLInputFile
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAHNGDlhq6KJAr7Ifr_QF-NSurCMSbShNaE"
 CHANNEL_ID = "@Sami_V_Ahye"
-GROQ_API_KEY = "gsk_your_key_here"  # Получи бесплатно на console.groq.com
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 # ===============================
 
-# Берём новости из RSS этих каналов
 SOURCES = [
     "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
     "https://ria.ru/export/rss2/index.xml",
@@ -82,13 +81,12 @@ async def fetch_rss_feed(url):
         return []
 
 async def rewrite_with_groq(title, original_text):
-    """Переписывает новость в стиле твоего идеального поста"""
     prompt = f"""Перепиши эту новость в стиле для Telegram-канала. Используй такие же приёмы: 
 - ЗАГЛАВНЫЕ БУКВЫ в начале
 - Эмодзи 🔺 или другой по смыслу
-- Эмоциональный, патриотичный стиль как в примере
+- Эмоциональный стиль
 - Коротко, ёмко, без воды
-- Добавь в конце строку с 📷 СВА 📷
+- В конце добавь 📷 СВА 📷
 
 Вот пример:
 🔺 СЕГОДНЯ ПОД ТОМСКОМ НЕКИЙ ПАВЕЛ СЕРГЕЕВ СБИЛ 67 БЕСПИЛОТНИКОВ 🔺
@@ -125,14 +123,12 @@ async def rewrite_with_groq(title, original_text):
     return None
 
 async def generate_image(prompt):
-    """Генерирует картинку через бесплатный Pollinations AI"""
     try:
-        # Создаём запрос для картинки на основе заголовка
-        image_prompt = f"news illustration, {prompt}, realistic, high quality"
+        image_prompt = f"news illustration, {prompt}, realistic, high quality, cinematic lighting"
         url = f"https://image.pollinations.ai/prompt/{image_prompt}?width=1080&height=720&nologo=true"
         return url
     except Exception as e:
-        logging.error(f"Image generation error: {e}")
+        logging.error(f"Image error: {e}")
         return None
 
 async def process_and_post():
@@ -145,7 +141,6 @@ async def process_and_post():
         all_news.extend(news_items)
         await asyncio.sleep(1)
     
-    # Убираем дубликаты
     unique_news = []
     seen = set()
     for item in all_news:
@@ -163,12 +158,10 @@ async def process_and_post():
     for news_item in new_news:
         logging.info(f"Обработка: {news_item['title'][:50]}...")
         
-        # Переписываем новость через Groq
         post_text = await rewrite_with_groq(news_item['title'], news_item['description'])
         if not post_text:
             post_text = f"🔺 {news_item['title'].upper()} 🔺\n\n{news_item['description']}\n\n📷 СВА 📷"
         
-        # Генерируем картинку
         image_url = await generate_image(news_item['title'])
         
         try:
@@ -183,7 +176,7 @@ async def process_and_post():
             logging.info(f"Опубликовано")
             await asyncio.sleep(10)
         except Exception as e:
-            logging.error(f"Ошибка публикации: {e}")
+            logging.error(f"Ошибка: {e}")
 
 async def start_posting():
     while True:
