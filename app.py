@@ -25,7 +25,7 @@ SOURCES = [
     "https://lenta.ru/rss",
 ]
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 1
 POSTS_PER_CHECK = 3
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
