@@ -73,6 +73,37 @@ async def search_unsplash_image(keywords):
         logging.error(f"Unsplash error: {e}")
     return None
 
+async def fetch_first_paragraph(url):
+    """Загружает страницу новости и вытаскивает первый абзац текста"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        sess = await get_session()
+        async with sess.get(url, timeout=20, headers=headers) as resp:
+            if resp.status != 200:
+                return None
+            html = await resp.text()
+            soup = BeautifulSoup(html, 'html.parser')
+            
+            # Удаляем скрипты и стили
+            for script in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                script.decompose()
+            
+            # Ищем первый параграф с текстом
+            paragraphs = soup.find_all('p')
+            for p in paragraphs:
+                text = p.get_text().strip()
+                # Отфильтровываем короткие или бессмысленные абзацы
+                if len(text) > 100 and not re.search(r'фото|видео|подписаться|реклама|cookie', text, re.I):
+                    # Чистим текст
+                    text = re.sub(r'\s+', ' ', text)
+                    return text[:MAX_TEXT_LENGTH]
+            return None
+    except Exception as e:
+        logging.error(f"Ошибка загрузки страницы {url}: {e}")
+        return None
+
 async def fetch_rss_feed(url):
     try:
         sess = await get_session()
@@ -104,9 +135,7 @@ async def fetch_rss_feed(url):
 
 def clean_text(text):
     """Убирает мусор из текста"""
-    # Убираем лишние пробелы и переносы
     text = re.sub(r'\s+', ' ', text)
-    # Убираем фразы типа "Читать ria.ru в", "Архивное фото" и т.д.
     garbage_phrases = [
         r'Читать \w+\.ru в',
         r'Архивное фото',
@@ -127,13 +156,12 @@ def clean_text(text):
     ]
     for phrase in garbage_phrases:
         text = re.sub(phrase, '', text, flags=re.IGNORECASE)
-    # Убираем множественные пробелы
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
 def get_emoji_by_title(title):
     title_lower = title.lower()
-    if re.search(r'путин|трамп|байден|политик|кремль|депутат|госдума|выборы|пезешкиан', title_lower):
+    if re.search(r'путин|трамп|байден|политик|кремль|депутат|госдума|выборы', title_lower):
         return "🏛️"
     if re.search(r'войн|арми|солдат|танк|обстрел|атака|взрыв|украин|израиль|палестин|иран', title_lower):
         return "💥"
@@ -141,31 +169,35 @@ def get_emoji_by_title(title):
         return "💰"
     if re.search(r'авари|дтп|погиб|смерт|убийств|пожар|наводн|землетряс', title_lower):
         return "🚨"
-    if re.search(r'пасх|рождеств|праздник', title_lower):
+    if re.search(r'пасх|рождеств|праздник|поздравил', title_lower):
         return "🐣"
     return "⚡️"
 
 async def rewrite_news(news_item):
     title = news_item['title']
-    raw_desc = news_item['description']
+    url = news_item['url']
     
-    # Чистим текст
-    clean_desc = clean_text(raw_desc)
+    # Пытаемся получить первый абзац со страницы
+    page_text = await fetch_first_paragraph(url)
+    
+    if page_text:
+        final_text = clean_text(page_text)
+    else:
+        # Если страница не загрузилась, используем RSS-описание
+        final_text = clean_text(news_item['description'])
+    
+    # Если текста всё равно нет
+    if not final_text or len(final_text) < 50:
+        final_text = "Подробнее по ссылке"
     
     # Обрезаем до лимита
-    if len(clean_desc) > MAX_TEXT_LENGTH:
-        clean_desc = clean_desc[:MAX_TEXT_LENGTH] + "..."
+    if len(final_text) > MAX_TEXT_LENGTH:
+        final_text = final_text[:MAX_TEXT_LENGTH] + "..."
     
     emoji = get_emoji_by_title(title)
     
-    # Формируем пост
     post = f"{emoji} <b>{title}</b>\n\n"
-    
-    if clean_desc and len(clean_desc) > 20:
-        post += f"{clean_desc}\n\n"
-    else:
-        post += f"Подробнее по ссылке\n\n"
-    
+    post += f"{final_text}\n\n"
     post += f'⚡<a href="https://t.me/{CHANNEL_ID[1:]}">СВА</a>⚡'
     
     # Ищем картинку по заголовку
