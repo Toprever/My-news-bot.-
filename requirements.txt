@@ -3,4 +3,3 @@ aiohttp
 beautifulsoup4
 flask
 lxml
-newspaper3k
