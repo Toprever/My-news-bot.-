@@ -12,18 +12,13 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import URLInputFile
 from bs4 import BeautifulSoup
 
-# ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAFBQoHXJ6Mytg2hFj-CLE-sOvr5JPMMtj0"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
-# ===============================
 
-SOURCES = [
-    "https://telegram-rss-parser-web.vercel.app/rss/nmshhub",
-]
-
-CHECK_INTERVAL = 1
-POSTS_PER_CHECK = 60
+SOURCES = ["https://telegram-rss-parser-web.vercel.app/rss/nmshhub"]
+CHECK_INTERVAL = 5 
+POSTS_PER_CHECK = 3
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -82,14 +77,12 @@ async def fetch_rss_feed(url):
         return []
 
 def get_emoji(title):
-    if re.search(r'путин|трамп|байден|кремль|депутат|госдума', title.lower()):
+    if re.search(r'путин|трамп|байден|кремль', title.lower()):
         return "💎"
-    if re.search(r'войн|арми|украин|дрон|всу|кадыров', title.lower()):
+    if re.search(r'войн|арми|украин|дрон', title.lower()):
         return "💥"
-    if re.search(r'рубл|доллар|нефт|газ|денег', title.lower()):
+    if re.search(r'рубл|доллар|нефт|газ', title.lower()):
         return "💰"
-    if re.search(r'авари|дтп|погиб|смерт|убийств|пожар', title.lower()):
-        return "🚨"
     return "🔺"
 
 def make_post(title, desc):
@@ -106,7 +99,6 @@ async def make_image(title):
 
 async def main_loop():
     posted = load_posted()
-    
     logging.info("Сбор новостей...")
     news = []
     for src in SOURCES:
@@ -131,7 +123,6 @@ async def main_loop():
     for item in new_items:
         text = make_post(item['title'], item['description'])
         img = await make_image(item['title'])
-        
         try:
             photo = URLInputFile(img)
             await bot.send_photo(chat_id=f"@{CHANNEL_ID}", photo=photo, caption=text, parse_mode="HTML")
