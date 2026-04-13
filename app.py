@@ -16,7 +16,10 @@ BOT_TOKEN = "8678003507:AAFBQoHXJ6Mytg2hFj-CLE-sOvr5JPMMtj0"
 CHANNEL_ID = "Sam_V_Shocke"
 CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
 
-SOURCES = ["https://telegram-rss-parser-web.vercel.app/rss/nmshhub"]
+SOURCES = [
+    "https://ria.ru/export/rss2/index.xml",
+    "https://tass.ru/rss",
+]
 CHECK_INTERVAL = 5 
 POSTS_PER_CHECK = 3
 
