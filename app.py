@@ -24,7 +24,7 @@ SOURCES = [
     "https://naked-science.ru/allrss",
 ]
 
-CHECK_INTERVAL = 1
+CHECK_INTERVAL = 30
 POSTS_PER_CHECK = 5
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
