@@ -14,18 +14,37 @@ from bs4 import BeautifulSoup
 
 # ========== НАСТРОЙКИ ==========
 BOT_TOKEN = "8678003507:AAFBQoHXJ6Mytg2hFj-CLE-sOvr5JPMMtj0"
-CHANNEL_ID = "testbotatestbotanewstest"
+CHANNEL_ID = "Sam_V_Shocke"
+CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
 # ===============================
 
 SOURCES = [
-    "https://ria.ru/export/rss2/index.xml",
-    "https://tass.ru/rss",
-    "https://lenta.ru/rss",
-    "https://naked-science.ru/allrss",
+    # Глобальные новости
+    "http://feeds.bbci.co.uk/news/rss.xml",
+    "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "http://feeds.reuters.com/reuters/topNews",
+    "https://www.theguardian.com/world/rss",
+    "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
+    "https://feeds.npr.org/1001/rss.xml",
+    # Технологии
+    "https://techcrunch.com/feed/",
+    "https://www.wired.com/feed/rss",
+    "https://www.engadget.com/rss.xml",
+    "https://hnrss.org/frontpage",
+    # Бизнес и финансы
+    "https://feeds.a.dj.com/rss/RSSWorldNews.xml",
+    "https://www.economist.com/feeds/print-sections/77/business.xml",
+    "https://hbr.org/feed",
+    # Аналитика
+    "https://stratechery.com/feed/",
+    "https://longreads.com/feed/",
+    "https://fs.blog/feed/",
+    # Украинские новости
+    "https://www.euronews.com/rss?level=tag&name=ukraine",
 ]
 
-CHECK_INTERVAL = 30
-POSTS_PER_CHECK = 5
+CHECK_INTERVAL = 15  # 15 минут между циклами (4 поста в час)
+POSTS_PER_CHECK = 1
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -37,8 +56,11 @@ POSTED_FILE = "posted_news.json"
 
 def load_posted():
     if os.path.exists(POSTED_FILE):
-        with open(POSTED_FILE, 'r') as f:
-            return set(json.load(f))
+        try:
+            with open(POSTED_FILE, 'r') as f:
+                return set(json.load(f))
+        except:
+            return set()
     return set()
 
 def save_posted(posted_set):
@@ -51,22 +73,6 @@ async def get_session():
         session = aiohttp.ClientSession()
     return session
 
-def get_emoji_and_hashtag(title):
-    t = title.lower()
-    if re.search(r'путин|трамп|байден|кремль|выборы|депутат', t):
-        return "🏛️", "#политика"
-    if re.search(r'война|армия|солдат|танк|обстрел|атака|взрыв|украина|дрон|всу', t):
-        return "💥", "#война"
-    if re.search(r'рубль|доллар|евро|нефть|газ|цена|деньги|бизнес|санкции', t):
-        return "💰", "#экономика"
-    if re.search(r'авария|дтп|пожар|наводнение|землетрясение|погиб|спасение', t):
-        return "🚨", "#чп"
-    if re.search(r'наука|исследование|ученые|космос|технология|открытие', t):
-        return "🔬", "#наука"
-    if re.search(r'спорт|футбол|хоккей|олимпиада|чемпионат|матч', t):
-        return "⚽", "#спорт"
-    return "📰", "#новости"
-
 async def fetch_rss_feed(url):
     try:
         sess = await get_session()
@@ -76,62 +82,72 @@ async def fetch_rss_feed(url):
             content = await resp.text()
             soup = BeautifulSoup(content, 'xml')
             items = []
-            for item in soup.find_all('item')[:5]:
+            for item in soup.find_all('item')[:10]:
                 title = item.find('title')
                 title_text = title.text if title else ""
                 link = item.find('link')
                 link_url = link.text if link else ""
-                desc = item.find('description')
-                desc_text = desc.text if desc else ""
+                description = item.find('description')
+                desc_text = description.text if description else ""
                 desc_text = re.sub(r'<[^>]+>', '', desc_text)
                 desc_text = re.sub(r'\s+', ' ', desc_text).strip()
-                # Пробуем вытащить картинку из description или enclosure
-                img = None
-                enclosure = item.find('enclosure')
-                if enclosure and enclosure.get('url'):
-                    img = enclosure.get('url')
-                elif 'img' in desc_text:
-                    img_match = re.search(r'https?://[^\s]+\.(jpg|jpeg|png|webp)', desc_text)
-                    if img_match:
-                        img = img_match.group(0)
                 if title_text and link_url:
                     items.append({
                         'title': title_text,
-                        'description': desc_text[:400],
+                        'description': desc_text[:500],
                         'url': link_url,
-                        'image': img,
                     })
             return items
     except Exception as e:
         logging.error(f"RSS error {url}: {e}")
         return []
 
-def make_post(item):
-    emoji, tag = get_emoji_and_hashtag(item['title'])
-    text = f"{emoji} <b>{item['title']}</b>\n\n"
-    if item['description']:
-        text += f"{item['description']}\n\n"
-    text += f"{tag}"
-    return text, item['image']
+def get_emoji(title):
+    title_lower = title.lower()
+    if re.search(r'путин|трамп|байден|кремль|мишустин', title_lower):
+        return "💎"
+    if re.search(r'войн|арми|украин|дрон|всу|атака|обстрел', title_lower):
+        return "💥"
+    if re.search(r'рубл|доллар|нефт|газ|денег|бизнес|финанс', title_lower):
+        return "💰"
+    if re.search(r'онк|вакцин|лечени|медицин|больниц|врач', title_lower):
+        return "💊"
+    if re.search(r'технологи|tech|apple|google|микрочип|ai|ии', title_lower):
+        return "📱"
+    if re.search(r'наводн|пожар|авари|дтп|погиб|смерт', title_lower):
+        return "🚨"
+    return "🔺"
+
+def make_post(title, desc):
+    emoji = get_emoji(title)
+    text = desc if desc and len(desc) > 30 else "Новость без подробностей"
+    return f"<b>{emoji} {title.upper()} {emoji}</b>\n\n{text}\n\n⚡<a href='{CHANNEL_LINK}'>СВШ</a>⚡"
+
+async def make_image(title):
+    try:
+        kw = re.sub(r'[^\w\s]', '', title)[:50]
+        return f"https://image.pollinations.ai/prompt/{kw}?width=1080&height=720"
+    except:
+        return "https://i.postimg.cc/3x6k9q7R/default-news.jpg"
 
 async def main_loop():
     posted = load_posted()
     
     logging.info("Сбор новостей...")
-    all_news = []
+    news = []
     for src in SOURCES:
-        news = await fetch_rss_feed(src)
-        all_news.extend(news)
+        items = await fetch_rss_feed(src)
+        news.extend(items)
         await asyncio.sleep(1)
     
-    unique = []
+    uniq = []
     seen = set()
-    for item in all_news:
+    for item in news:
         if item['title'][:50] not in seen:
             seen.add(item['title'][:50])
-            unique.append(item)
+            uniq.append(item)
     
-    new_items = [x for x in unique if x['url'] not in posted]
+    new_items = [x for x in uniq if x['url'] not in posted]
     new_items = new_items[:POSTS_PER_CHECK]
     
     if not new_items:
@@ -139,13 +155,11 @@ async def main_loop():
         return
     
     for item in new_items:
-        text, img = make_post(item)
+        text = make_post(item['title'], item['description'])
+        img = await make_image(item['title'])
         try:
-            if img:
-                photo = URLInputFile(img)
-                await bot.send_photo(chat_id=f"@{CHANNEL_ID}", photo=photo, caption=text, parse_mode="HTML")
-            else:
-                await bot.send_message(chat_id=f"@{CHANNEL_ID}", text=text, parse_mode="HTML")
+            photo = URLInputFile(img)
+            await bot.send_photo(chat_id=f"@{CHANNEL_ID}", photo=photo, caption=text, parse_mode="HTML")
             posted.add(item['url'])
             save_posted(posted)
             logging.info(f"Опубликовано: {item['title'][:50]}...")
