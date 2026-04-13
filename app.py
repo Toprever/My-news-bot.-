@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 BOT_TOKEN = "8678003507:AAFBQoHXJ6Mytg2hFj-CLE-sOvr5JPMMtj0"
 CHANNEL_ID = "Sam_V_Shocke"
-CHANNEL_LINK = "https://t.me/Sam_V_Shocke"
+CHANNEL_LINK = "https://t.me/testbotatestbotanewstest"
 
 SOURCES = [
     "https://ria.ru/export/rss2/index.xml",
